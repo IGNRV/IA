@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16
+    container_name: ollama_chat_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ollama_chat
+      POSTGRES_USER: ollama
+      POSTGRES_PASSWORD: ollama
+    ports:
+      - "5432:5432"
+    volumes:
+      - ollama_chat_pgdata:/var/lib/postgresql/data
+
+volumes:
+  ollama_chat_pgdata:
