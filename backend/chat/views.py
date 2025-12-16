@@ -16,7 +16,7 @@ def _ollama_cfg():
     system_prompt = os.getenv("OLLAMA_SYSTEM_PROMPT", "").strip()
     return base_url, model, timeout, max_hist, system_prompt
 
-def _build_messages_from_db(session: ChatSession):
+def _build_messages_from_db(session: ChatSession, global_instructions: str = ""):
     _, _, _, max_hist, env_system_prompt = _ollama_cfg()
     msgs = []
 
@@ -24,9 +24,13 @@ def _build_messages_from_db(session: ChatSession):
     if env_system_prompt:
         parts.append(env_system_prompt.strip())
 
+    global_txt = (global_instructions or "").strip()
+    if global_txt:
+        parts.append("Instrucciones globales:\n" + global_txt)
+
     custom = (session.custom_instructions or "").strip()
     if custom:
-        parts.append("Instrucciones personalizadas:\n" + custom)
+        parts.append("Instrucciones de este chat:\n" + custom)
 
     if parts:
         msgs.append({"role": "system", "content": "\n\n".join(parts)})
@@ -110,6 +114,8 @@ class ChatView(APIView):
         if not content:
             return Response({"detail": "content is required"}, status=status.HTTP_400_BAD_REQUEST)
 
+        global_instructions = (request.data.get("global_instructions") or "").strip()
+
         try:
             s = ChatSession.objects.get(id=session_id)
         except ChatSession.DoesNotExist:
@@ -124,7 +130,7 @@ class ChatView(APIView):
             s.save(update_fields=["title"])
 
         stream = request.query_params.get("stream") in ("1", "true", "yes")
-        messages = _build_messages_from_db(s)
+        messages = _build_messages_from_db(s, global_instructions=global_instructions)
 
         if stream:
             def event_stream():

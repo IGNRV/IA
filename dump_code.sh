@@ -70,13 +70,38 @@ while IFS= read -r -d '' f; do
   rel="${f#"$ROOT_DIR"/}"
 
   {
-    echo "================================================================================"
     echo "FILE: $rel"
-    echo "================================================================================"
     cat "$f"
     echo -e "\n"
   } >> "$OUT_FILE"
 
 done < <(find "${FIND_ARGS[@]}")
+
+# Si el usuario está haciendo dump del backend/frontend "como proyecto", también generar el combinado.
+# (Solo si el script se invoca de forma normal; evita bucles si se llama a sí mismo con --no-combine)
+if [[ "${DUMP_CODE_NO_COMBINE:-0}" != "1" ]]; then
+  FRONTEND_DIR="/home/z99sys/Documentos/proyectos/chatIa/frontend"
+  BACKEND_DIR="/home/z99sys/Documentos/proyectos/chatIa/backend"
+
+  FRONTEND_OUT="frontend_code.txt"
+  BACKEND_OUT="backend_code.txt"
+  ALL_OUT="chatIa_all_code.txt"
+
+  DUMP_CODE_NO_COMBINE=1 ./dump_code.sh "$FRONTEND_DIR" "$FRONTEND_OUT" \
+    --exclude-dir node_modules \
+    --exclude-file .env \
+    --exclude-file .env.example \
+    --exclude-file package-lock.json \
+    --exclude-file package.json
+
+  DUMP_CODE_NO_COMBINE=1 ./dump_code.sh "$BACKEND_DIR" "$BACKEND_OUT" \
+    --exclude-dir .venv \
+    --exclude-file .env \
+    --exclude-file .env.example
+
+  cat "$FRONTEND_OUT" "$BACKEND_OUT" > "$ALL_OUT"
+
+  rm -f "$FRONTEND_OUT" "$BACKEND_OUT"
+fi
 
 echo "OK -> $OUT_FILE"

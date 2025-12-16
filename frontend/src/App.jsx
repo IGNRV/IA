@@ -29,9 +29,14 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  // Instrucciones globales (siempre se envían al backend en cada prompt)
   const [defaultInstructions, setDefaultInstructions] = useState('')
-  const [instructionsText, setInstructionsText] = useState('')
-  const [instructionsDirty, setInstructionsDirty] = useState(false)
+
+  // Modal instrucciones
+  const [instrOpen, setInstrOpen] = useState(false)
+  const [instrMode, setInstrMode] = useState('default') // 'default' | 'chat'
+  const [instrDraft, setInstrDraft] = useState('')
+  const [instrDirty, setInstrDirty] = useState(false)
 
   const bottomRef = useRef(null)
 
@@ -83,20 +88,36 @@ export default function App() {
   }, [activeSessionId])
 
   useEffect(() => {
-    // Sincroniza instrucciones del chat activo (o default si no hay chat activo)
-    if (activeSessionId && activeSession) {
-      setInstructionsText(activeSession.custom_instructions || '')
-      setInstructionsDirty(false)
-      return
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        if (instrOpen) setInstrOpen(false)
+      }
     }
-    setInstructionsText(defaultInstructions || '')
-    setInstructionsDirty(false)
-  }, [activeSessionId, activeSession, defaultInstructions])
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [instrOpen])
+
+  function openInstructionsModal(mode) {
+    const hasChat = !!activeSessionId
+    const nextMode = mode || (hasChat ? 'chat' : 'default')
+    setInstrMode(nextMode)
+
+    if (nextMode === 'chat' && hasChat) {
+      setInstrDraft((activeSession?.custom_instructions || '').toString())
+    } else {
+      setInstrDraft((defaultInstructions || '').toString())
+    }
+
+    setInstrDirty(false)
+    setInstrOpen(true)
+  }
 
   async function onNewChat() {
     setError('')
     try {
-      const s = await createSession({ title: '', custom_instructions: defaultInstructions || '' })
+      // El chat hereda custom_instructions iniciales (por chat) desde lo global,
+      // pero además lo global SIEMPRE se envía en cada prompt.
+      const s = await createSession({ title: '', custom_instructions: '' })
       await refreshSessions(s.id)
       setMessages([])
     } catch (e) {
@@ -122,24 +143,29 @@ export default function App() {
     }
   }
 
-  async function onSaveInstructions() {
+  async function saveInstructions() {
     setError('')
     try {
-      if (activeSessionId && activeSession) {
-        await updateSession(activeSessionId, { custom_instructions: instructionsText || '' })
+      if (instrMode === 'chat') {
+        if (!activeSessionId) {
+          throw new Error('No hay un chat activo para guardar instrucciones por chat.')
+        }
+        await updateSession(activeSessionId, { custom_instructions: instrDraft || '' })
         await refreshSessions(activeSessionId)
-        setInstructionsDirty(false)
+        setInstrDirty(false)
+        setInstrOpen(false)
         return
       }
 
-      // No hay chat activo: guardar como default para nuevos chats
+      // default/global
       try {
-        localStorage.setItem('ollama_default_instructions', instructionsText || '')
+        localStorage.setItem('ollama_default_instructions', instrDraft || '')
       } catch {
         // ignore
       }
-      setDefaultInstructions(instructionsText || '')
-      setInstructionsDirty(false)
+      setDefaultInstructions(instrDraft || '')
+      setInstrDirty(false)
+      setInstrOpen(false)
     } catch (e) {
       setError(String(e.message || e))
     }
@@ -156,7 +182,7 @@ export default function App() {
     try {
       let sid = activeSessionId
       if (!sid) {
-        const s = await createSession({ title: '', custom_instructions: defaultInstructions || '' })
+        const s = await createSession({ title: '', custom_instructions: '' })
         sid = s.id
         await refreshSessions(sid)
       }
@@ -166,7 +192,7 @@ export default function App() {
       const tempAsst = { id: `tmp-a-${Date.now()}`, role: 'assistant', content: '', created_at: new Date().toISOString() }
       setMessages((prev) => [...prev, tempUser, tempAsst])
 
-      // streaming
+      // streaming (SIEMPRE envía instrucciones globales guardadas)
       await sendMessageStream(sid, text, (delta) => {
         setMessages((prev) => {
           const copy = [...prev]
@@ -175,7 +201,7 @@ export default function App() {
           return copy
         })
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-      })
+      }, defaultInstructions || '')
 
       // refresca desde BD (para tener ids reales y título actualizado)
       await refreshSessions(sid)
@@ -194,15 +220,15 @@ export default function App() {
     return s?.title || 'Chat'
   }, [sessions, activeSessionId])
 
-  const instructionsLabel = useMemo(() => {
-    if (activeSessionId && activeSession) return 'Instrucciones personalizadas (este chat)'
-    return 'Instrucciones personalizadas (por defecto)'
-  }, [activeSessionId, activeSession])
+  const effectiveModeLabel = useMemo(() => {
+    if (instrMode === 'chat') return 'Instrucciones (este chat)'
+    return 'Instrucciones (globales)'
+  }, [instrMode])
 
-  const instructionsSub = useMemo(() => {
-    if (activeSessionId && activeSession) return 'Se inyectan como “system prompt” al modelo'
-    return 'Se aplican automáticamente al crear un chat nuevo'
-  }, [activeSessionId, activeSession])
+  const effectiveModeSub = useMemo(() => {
+    if (instrMode === 'chat') return 'Se guardan en el chat seleccionado'
+    return 'Siempre se aplican a cualquier prompt (todos los chats)'
+  }, [instrMode])
 
   return (
     <div className="app">
@@ -213,35 +239,6 @@ export default function App() {
         </div>
 
         <button className="btn" onClick={onNewChat}>Nuevo chat</button>
-
-        <div className="instructions">
-          <div className="instructions-head">
-            <div className="instructions-title">{instructionsLabel}</div>
-            <div className="instructions-sub">{instructionsSub}</div>
-          </div>
-
-          <div className="instructions-actions">
-            <textarea
-              className="input instructions-textarea"
-              placeholder="Ej: Responde en español, sé conciso, usa bullets, etc."
-              value={instructionsText}
-              onChange={(e) => {
-                setInstructionsText(e.target.value)
-                setInstructionsDirty(true)
-              }}
-              rows={4}
-              disabled={loading}
-            />
-            <button
-              className="btn primary"
-              onClick={onSaveInstructions}
-              disabled={loading || !instructionsDirty}
-              title={activeSessionId ? 'Guarda instrucciones para este chat' : 'Guarda instrucciones por defecto'}
-            >
-              Guardar
-            </button>
-          </div>
-        </div>
 
         <div className="sessions">
           {sessions.map((s) => (
@@ -280,6 +277,15 @@ export default function App() {
         <header className="topbar">
           <div className="topbar-title">{activeTitle}</div>
           <div className="topbar-right">
+            <button
+              className="btn"
+              onClick={() => openInstructionsModal()}
+              disabled={loading}
+              title="Abrir instrucciones personalizadas"
+            >
+              Instrucciones
+            </button>
+
             {activeSessionId ? (
               <button
                 className="btn danger"
@@ -290,6 +296,7 @@ export default function App() {
                 Eliminar chat
               </button>
             ) : null}
+
             <span className={`pill ${loading ? 'pill-live' : ''}`}>{loading ? 'Generando...' : 'Listo'}</span>
           </div>
         </header>
@@ -328,6 +335,84 @@ export default function App() {
           <div className="muted">Enter para enviar · Shift+Enter para salto de línea</div>
         </footer>
       </main>
+
+      {instrOpen ? (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setInstrOpen(false)
+          }}
+        >
+          <div className="modal" role="dialog" aria-modal="true" aria-label="Instrucciones personalizadas">
+            <div className="modal-header">
+              <div>
+                <div className="modal-title">{effectiveModeLabel}</div>
+                <div className="modal-subtitle">{effectiveModeSub}</div>
+              </div>
+              <button className="modal-close" onClick={() => setInstrOpen(false)} title="Cerrar">
+                ×
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="modal-tabs">
+                <button
+                  className={`tab ${instrMode === 'default' ? 'active' : ''}`}
+                  onClick={() => {
+                    setInstrMode('default')
+                    setInstrDraft((defaultInstructions || '').toString())
+                    setInstrDirty(false)
+                  }}
+                  disabled={loading}
+                  title="Instrucciones globales (siempre se aplican)"
+                >
+                  Global
+                </button>
+
+                <button
+                  className={`tab ${instrMode === 'chat' ? 'active' : ''}`}
+                  onClick={() => {
+                    if (!activeSessionId) return
+                    setInstrMode('chat')
+                    setInstrDraft((activeSession?.custom_instructions || '').toString())
+                    setInstrDirty(false)
+                  }}
+                  disabled={loading || !activeSessionId}
+                  title={activeSessionId ? 'Instrucciones solo para este chat' : 'Selecciona un chat primero'}
+                >
+                  Este chat
+                </button>
+              </div>
+
+              <textarea
+                className="input modal-textarea"
+                placeholder="Ej: Responde en español, sé conciso, usa bullets, etc."
+                value={instrDraft}
+                onChange={(e) => {
+                  setInstrDraft(e.target.value)
+                  setInstrDirty(true)
+                }}
+                rows={8}
+                disabled={loading}
+              />
+            </div>
+
+            <div className="modal-footer">
+              <div className="modal-hint">
+                Se aplican como <b>system prompt</b>. ESC para cerrar.
+              </div>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button className="btn" onClick={() => setInstrOpen(false)} disabled={loading}>
+                  Cancelar
+                </button>
+                <button className="btn primary" onClick={saveInstructions} disabled={loading || !instrDirty}>
+                  Guardar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

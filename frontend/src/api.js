@@ -70,9 +70,14 @@ export async function getMessages(sessionId) {
 /**
  * Streaming SSE via POST fetch (backend devuelve text/event-stream).
  * Retorna el texto final.
+ *
+ * globalInstructions: string opcional (se inyecta en system prompt en backend).
  */
-export async function sendMessageStream(sessionId, content, onDelta) {
-  const res = await apiPost(`/api/sessions/${sessionId}/chat/?stream=1`, { content })
+export async function sendMessageStream(sessionId, content, onDelta, globalInstructions = '') {
+  const res = await apiPost(`/api/sessions/${sessionId}/chat/?stream=1`, {
+    content,
+    global_instructions: globalInstructions || '',
+  })
   const reader = res.body.getReader()
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
@@ -109,8 +114,11 @@ export async function sendMessageStream(sessionId, content, onDelta) {
   return full
 }
 
-export async function sendMessage(sessionId, content) {
-  const res = await apiPost(`/api/sessions/${sessionId}/chat/`, { content })
+export async function sendMessage(sessionId, content, globalInstructions = '') {
+  const res = await apiPost(`/api/sessions/${sessionId}/chat/`, {
+    content,
+    global_instructions: globalInstructions || '',
+  })
   const data = await res.json()
   return data.assistant || ''
 }
